@@ -79,6 +79,11 @@ button{
   justify-content:space-between;
   align-items:center
 }
+.timer{
+  margin-top:8px;
+  font-size:12px;
+  color:var(--muted)
+}
 </style>
 </head>
 
@@ -94,6 +99,7 @@ button{
     <div id="billList" class="list"></div>
     <button id="searchBtn" disabled>Search</button>
     <div id="authStatus" class="muted">Authenticating…</div>
+    <div id="timer" class="timer" style="display:none">Elapsed Time: 00:00</div>
   </div>
 
   <!-- SUMMARY -->
@@ -126,6 +132,8 @@ let FMS_TOKEN=null;
 let AUTH_TOKEN=null;
 let debounce=null;
 let selectedBillTo=null;
+let timerInterval=null;
+let startTime=null;
 
 const $=id=>document.getElementById(id);
 
@@ -172,18 +180,44 @@ async function hasBOL(orderNo){
     });
     const j=await r.json();
     return (j?.data||[]).some(f=>f.file_type==="BOL");
-  }catch(e){
-    console.warn("BOL check failed:",orderNo,e);
+  }catch{
     return false;
   }
 }
 
-/* ---------- DELIVERED QUERY ---------- */
+/* ---------- BATCH PROCESSOR ---------- */
+async function processInBatches(items, batchSize, handler){
+  for(let i=0;i<items.length;i+=batchSize){
+    const batch=items.slice(i,i+batchSize);
+    await Promise.all(batch.map(handler));
+  }
+}
+
+/* ---------- TIMER ---------- */
+function startTimer(){
+  startTime=Date.now();
+  $("timer").style.display="block";
+  timerInterval=setInterval(()=>{
+    const elapsed=Math.floor((Date.now()-startTime)/1000);
+    const m=String(Math.floor(elapsed/60)).padStart(2,"0");
+    const s=String(elapsed%60).padStart(2,"0");
+    $("timer").textContent=`Elapsed Time: ${m}:${s}`;
+  },1000);
+}
+
+function stopTimer(){
+  clearInterval(timerInterval);
+}
+
+/* ---------- SEARCH ---------- */
 async function runSearch(){
   if(!selectedBillTo) return;
 
   $("results").innerHTML="";
   $("summaryCard").style.display="none";
+  $("totalCount").textContent="0";
+
+  startTimer();
 
   const payload={
     bill_to_accounts:[selectedBillTo.code],
@@ -210,9 +244,9 @@ async function runSearch(){
 
   let missingBolCount=0;
 
-  for(const o of items){
+  await processInBatches(items,15,async o=>{
     const bolExists=await hasBOL(o.order_no);
-    if(bolExists) continue;
+    if(bolExists) return;
 
     missingBolCount++;
 
@@ -228,7 +262,9 @@ async function runSearch(){
       <div class="muted">BOL Attached: <strong>NO</strong></div>
     `;
     $("results").appendChild(d);
-  }
+  });
+
+  stopTimer();
 
   $("summaryTitle").textContent=
     `Bill To: ${selectedBillTo.name} (${selectedBillTo.code})`;
@@ -236,7 +272,7 @@ async function runSearch(){
   $("summaryCard").style.display="block";
 }
 
-/* ---------- INPUT HANDLER ---------- */
+/* ---------- INPUT ---------- */
 $("billToInput").addEventListener("input",e=>{
   const q=e.target.value.trim();
   $("billList").innerHTML="";
