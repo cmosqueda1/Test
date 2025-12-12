@@ -71,7 +71,6 @@ pre{
     <label>Bill To</label>
     <input id="billToInput" placeholder="Type 3+ characters"/>
     <div id="billList" class="list"></div>
-    <button class="btn" id="searchOrders">Search Delivered Orders</button>
   </div>
 
   <div class="card">
@@ -83,53 +82,67 @@ pre{
 <script>
 (() => {
 
-const BASE="https://fms.item.com";
-const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
-const BILLTO_URL=`${BASE}/fms-platform-order/shipment-orders/search-business-client`;
+const BASE = "https://fms.item.com";
+const LOGIN_URL = `${BASE}/fms-platform-user/Auth/Login`;
+const BILLTO_URL = `${BASE}/fms-platform-order/shipment-orders/search-business-client`;
 
-const USER="PeniTaufalele";
-const PASS="FMSoffload1!";
-const FMS_CLIENT="FMS_WEB";
-const COMPANY_ID="SBFH";
+const USER = "PeniTaufalele";
+const PASS = "FMSoffload1!";
+const FMS_CLIENT = "FMS_WEB";
+const COMPANY_ID = "SBFH";
 
-let TOKEN=null;
-let AUTH=null;
-let debounce=null;
+let loggedIn = false;
+let debounce = null;
 
-const $=id=>document.getElementById(id);
-const out=$("output");
+const $ = id => document.getElementById(id);
+const out = $("output");
 
 async function login(){
-  if(TOKEN && AUTH) return;
-  const r=await fetch(LOGIN_URL,{
+  if (loggedIn) return;
+
+  const r = await fetch(LOGIN_URL,{
     method:"POST",
+    credentials:"include",
     headers:{
       "Content-Type":"application/json",
       "fms-client":FMS_CLIENT
     },
-    body:JSON.stringify({account:USER,password:PASS})
+    body:JSON.stringify({
+      account:USER,
+      password:PASS
+    })
   });
-  const j=await r.json();
-  TOKEN=j.token||j?.data?.token;
-  AUTH=j.authorization||j?.data?.authorization||j.token;
-  if(!TOKEN) throw "Login failed";
+
+  if (!r.ok) throw "Login failed";
+  loggedIn = true;
 }
 
 async function billToSearch(q){
   await login();
-  const r=await fetch(`${BILLTO_URL}?Code=${encodeURIComponent(q)}`,{
+
+  const r = await fetch(BILLTO_URL,{
+    method:"POST",
+    credentials:"include",
     headers:{
-      "Authorization":AUTH,
+      "Content-Type":"application/json",
       "company-id":COMPANY_ID,
       "fms-client":FMS_CLIENT
-    }
+    },
+    body:JSON.stringify({
+      code:q,
+      printName:"",
+      pageNum:1,
+      pageSize:20
+    })
   });
+
   return r.json();
 }
 
 $("billToInput").addEventListener("input",e=>{
   const q=e.target.value.trim();
   $("billList").innerHTML="";
+  out.textContent="";
   if(q.length<3) return;
 
   clearTimeout(debounce);
@@ -143,6 +156,7 @@ $("billToInput").addEventListener("input",e=>{
         d.onclick=()=>{
           $("billToInput").value=i.code;
           $("billList").innerHTML="";
+          out.textContent = JSON.stringify(i,null,2);
         };
         $("billList").appendChild(d);
       });
