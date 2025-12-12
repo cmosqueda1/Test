@@ -9,7 +9,7 @@
 :root{
   --bg:#0a0c10;--card:#0f1420;--text:#e6edf6;--muted:#93a4b7;
   --accent:#7c3aed;--accent2:#22d3ee;--border:#1f2a3a;
-  --ok:#10b981;--warn:#f59e0b
+  --ok:#10b981
 }
 *{box-sizing:border-box}
 body{
@@ -34,6 +34,15 @@ input{
   border:1px solid var(--border);
   color:var(--text)
 }
+button{
+  margin-top:10px;
+  padding:10px 16px;
+  border-radius:14px;
+  border:1px solid var(--border);
+  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  font-weight:700;
+  cursor:pointer
+}
 .list{margin-top:10px}
 .item{
   padding:10px;
@@ -46,7 +55,7 @@ input{
 .item:hover{background:#141b2e}
 .grid{
   display:grid;
-  grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+  grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
   gap:12px;
 }
 .order-card{
@@ -70,11 +79,6 @@ input{
   justify-content:space-between;
   align-items:center
 }
-.counts{
-  display:flex;
-  gap:16px;
-  font-size:13px
-}
 </style>
 </head>
 
@@ -88,6 +92,7 @@ input{
     <label>Bill To</label>
     <input id="billToInput" placeholder="Type 3+ characters"/>
     <div id="billList" class="list"></div>
+    <button id="searchBtn" disabled>Search</button>
     <div id="authStatus" class="muted">Authenticating…</div>
   </div>
 
@@ -95,9 +100,7 @@ input{
   <div class="card" id="summaryCard" style="display:none">
     <div class="header">
       <strong id="summaryTitle"></strong>
-      <div class="counts">
-        <div>Total Delivered: <span id="totalCount">0</span></div>
-      </div>
+      <div>Total Delivered: <span id="totalCount">0</span></div>
     </div>
   </div>
 
@@ -121,10 +124,11 @@ const COMPANY_ID="SBFH";
 let FMS_TOKEN=null;
 let AUTH_TOKEN=null;
 let debounce=null;
+let selectedBillTo=null;
 
 const $=id=>document.getElementById(id);
 
-/* ---------- AUTH (runs immediately) ---------- */
+/* ---------- AUTH ---------- */
 async function login(){
   const r=await fetch(LOGIN_URL,{
     method:"POST",
@@ -145,7 +149,6 @@ async function login(){
 async function billToSearch(q){
   const r=await fetch(`${BILLTO_URL}?Code=${encodeURIComponent(q)}`,{
     headers:{
-      "accept":"application/json",
       "fms-client":FMS_CLIENT,
       "fms-token":FMS_TOKEN,
       "authorization":AUTH_TOKEN,
@@ -156,45 +159,15 @@ async function billToSearch(q){
 }
 
 /* ---------- DELIVERED QUERY ---------- */
-async function loadDelivered(billToCode,billToName){
+async function runSearch(){
+  if(!selectedBillTo) return;
+
   $("results").innerHTML="";
   $("summaryCard").style.display="none";
 
   const payload={
-    order_nos:[],
-    tracking_nos:[],
-    customer_references:[],
-    bols:[],
-    bill_to_accounts:[billToCode],
-    master_order_ids:[],
+    bill_to_accounts:[selectedBillTo.code],
     status:["43","44","50"],
-    sub_status:[],
-    shipment_types:[],
-    service_levels:[],
-    trips:[],
-    shipper_terminals:[],
-    origin_states:[],
-    origin_zip_codes:[],
-    request_pickup_date:[],
-    pickup_appointment:[],
-    current_locations:[],
-    service_terminals:[],
-    lhs:[],
-    lh_etd_date:[],
-    lh_eta_date:[],
-    consignee_terminals:[],
-    consignee_state:[],
-    consignee_zip_codes:[],
-    desired_delivery_date:[],
-    delivery_appointment:[],
-    delivery_date:[],
-    pickup_complete_date:[],
-    pu_nos:[],
-    po_nos:[],
-    exception:false,
-    delayed:false,
-    hold:false,
-    business_client:"",
     record_status:"0",
     page_number:1,
     page_size:10000
@@ -215,7 +188,7 @@ async function loadDelivered(billToCode,billToName){
   const j=await r.json();
   const items=j?.data?.items||[];
 
-  $("summaryTitle").textContent=`Bill To: ${billToName} (${billToCode})`;
+  $("summaryTitle").textContent=`Bill To: ${selectedBillTo.name} (${selectedBillTo.code})`;
   $("totalCount").textContent=items.length;
   $("summaryCard").style.display="block";
 
@@ -227,8 +200,9 @@ async function loadDelivered(billToCode,billToName){
       <div><strong>PRO:</strong> ${o.tracking_no}</div>
       <div><strong>DO:</strong> ${o.order_no}</div>
       <div><strong>PU:</strong> ${o.reference5||"—"}</div>
-      <div class="muted">Terminal: ${o.service_terminal}</div>
-      <div class="muted">Delivered: ${o.delivery_date}</div>
+      <div class="muted">Pickup Complete: ${o.pickup_complete_date||"—"}</div>
+      <div class="muted">Delivered Date: ${o.delivery_date||"—"}</div>
+      <div class="muted">BOL Attached: <strong>null</strong></div>
     `;
     $("results").appendChild(d);
   });
@@ -238,6 +212,8 @@ async function loadDelivered(billToCode,billToName){
 $("billToInput").addEventListener("input",e=>{
   const q=e.target.value.trim();
   $("billList").innerHTML="";
+  $("searchBtn").disabled=true;
+  selectedBillTo=null;
   if(q.length<3) return;
 
   clearTimeout(debounce);
@@ -250,12 +226,15 @@ $("billToInput").addEventListener("input",e=>{
       d.onclick=()=>{
         $("billToInput").value=i.code;
         $("billList").innerHTML="";
-        loadDelivered(i.code,i.print_name);
+        selectedBillTo={code:i.code,name:i.print_name};
+        $("searchBtn").disabled=false;
       };
       $("billList").appendChild(d);
     });
   },300);
 });
+
+$("searchBtn").addEventListener("click", runSearch);
 
 /* ---------- INIT ---------- */
 login();
