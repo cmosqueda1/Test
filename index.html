@@ -2,81 +2,63 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>FMS Delivered Orders Audit</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>FMS Delivered Orders Audit</title>
 
 <style>
 :root{
-  --bg:#05070b;
-  --card:#0f1420;
-  --card-soft:#111827;
-  --text:#e6edf6;
-  --muted:#93a4b7;
-  --accent:#7c3aed;
-  --border:#1f2933;
-  --ok:#10b981;
+  --bg:#0a0c10;--card:#0f1420;--text:#e6edf6;--muted:#93a4b7;
+  --accent:#7c3aed;--accent2:#22d3ee;--ok:#10b981;--border:#1f2a3a
 }
-
 *{box-sizing:border-box}
-
-body{
+html,body{
   margin:0;
-  background:var(--bg);
+  background:radial-gradient(1200px 900px at 10% -10%, #121a2b 0%, transparent 60%), var(--bg);
   color:var(--text);
-  font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;
+  font-family:Inter,system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif
 }
-
-.wrap{
-  max-width:1100px;
-  margin:40px auto;
-  padding:20px;
-}
-
-h1{margin-bottom:16px}
-
+.wrap{max-width:980px;margin:40px auto;padding:0 16px 64px}
+h1{margin:0 0 6px;font-size:26px}
+.sub{color:var(--muted);margin-bottom:18px}
 .card{
-  background:linear-gradient(180deg,#111827 0%, #0b1220 100%);
+  background:linear-gradient(180deg, rgba(255,255,255,.02), transparent), var(--card);
   border:1px solid var(--border);
-  border-radius:16px;
+  border-radius:18px;
   padding:18px;
-  margin-bottom:16px;
+  box-shadow:0 10px 30px rgba(0,0,0,.35)
 }
-
-input,button{
+input{
   width:100%;
-  padding:12px;
-  border-radius:10px;
+  background:#0b0f19;
   border:1px solid var(--border);
-  background:#020617;
   color:var(--text);
+  border-radius:14px;
+  padding:12px;
 }
-
-button{
-  margin-top:10px;
-  background:linear-gradient(135deg,var(--accent),#4c1d95);
-  border:none;
-  cursor:pointer;
-}
-
 .bill-results{
-  margin-top:10px;
+  margin-top:8px;
   border:1px solid var(--border);
-  border-radius:12px;
+  border-radius:14px;
   overflow:hidden;
 }
-
 .bill-item{
   padding:10px 14px;
   cursor:pointer;
   border-bottom:1px solid var(--border);
 }
-
-.bill-item:hover{
-  background:#020617;
-}
-
+.bill-item:hover{background:#0b0f19}
 .bill-item:last-child{border-bottom:none}
-
+.btn{
+  cursor:pointer;border-radius:14px;padding:10px 16px;border:1px solid var(--border)
+}
+.btn-primary{
+  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  color:#05070b;font-weight:700
+}
+pre{
+  background:#0b0f19;border-radius:14px;border:1px solid var(--border);
+  padding:12px;white-space:pre-wrap
+}
 .badge{
   display:inline-block;
   padding:6px 12px;
@@ -84,144 +66,145 @@ button{
   border:1px solid var(--border);
   margin-right:8px;
 }
-
-.results{
-  font-family:ui-monospace,Consolas,monospace;
-  font-size:13px;
-  white-space:pre-wrap;
-}
 </style>
 </head>
 
 <body>
 <div class="wrap">
-<h1>FMS Delivered Orders Audit</h1>
+  <h1>FMS Delivered Orders Audit</h1>
+  <div class="sub">Search delivered orders by Bill To</div>
 
-<div class="card">
-  <label>Bill To</label>
-  <input id="billInput" placeholder="Type at least 3 characters…" oninput="billTypeAhead()"/>
-  <div id="billResults" class="bill-results"></div>
-</div>
+  <div class="card">
+    <label>Bill To</label>
+    <input id="billInput" placeholder="Type at least 3 characters…"/>
+    <div id="billResults" class="bill-results"></div>
+  </div>
 
-<div class="card">
-  <button onclick="searchOrders()">Search Delivered Orders</button>
-</div>
+  <div class="card" style="margin-top:14px">
+    <button class="btn btn-primary" id="run">Search Delivered Orders</button>
+  </div>
 
-<div class="card" id="summary"></div>
-<div class="card">
-  <div class="results" id="output"></div>
-</div>
+  <div class="card" style="margin-top:14px">
+    <div id="summary"></div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <strong>Output</strong>
+    <pre id="out"></pre>
+  </div>
 </div>
 
 <script>
-const FMS_BASE = "https://fms.item.com";
-let token = null;
-let selectedBill = null;
+(() => {
 
-/* =====================
-   LOGIN (FIXED)
-===================== */
-async function login(){
-  if(token) return token;
+const BASE="https://fms.item.com";
+const FMS_CLIENT="FMS_WEB";
+const COMPANY_ID="SBFH";
 
-  const res = await fetch(`${FMS_BASE}/fms-platform-user/Auth/Login`,{
+const USERNAME="cmosqueda";
+const PASSWORD="cam2121";
+
+const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
+const BILL_SEARCH_URL=`${BASE}/fms-platform-order/shipment-orders/search-business-client`;
+const ORDER_QUERY_URL=`${BASE}/fms-platform-order/shipment-orders/query`;
+
+const $=id=>document.getElementById(id);
+
+let TOKEN=null;
+let SELECTED_BILL=null;
+
+/* ================= AUTH ================= */
+async function auth(){
+  if(TOKEN) return TOKEN;
+  const r=await fetch(LOGIN_URL,{
     method:"POST",
     headers:{
       "Content-Type":"application/json",
-      "fms-client":"FMS_WEB",
-      "company-id":"SBFH"
+      "fms-client":FMS_CLIENT
     },
-    body:JSON.stringify({
-      account:"cmosqueda",
-      password:"cam2121"
-    })
+    body:JSON.stringify({account:USERNAME,password:PASSWORD})
   });
-
-  const json = await res.json();
-  token = json.data.token;
-  return token;
+  const j=await r.json();
+  TOKEN=j.token||j?.data?.token;
+  if(!TOKEN) throw new Error("Login failed");
+  return TOKEN;
 }
 
-/* =====================
-   BILL TO TYPEAHEAD
-===================== */
-async function billTypeAhead(){
-  const q = document.getElementById("billInput").value.trim();
-  if(q.length < 3) return document.getElementById("billResults").innerHTML = "";
+/* ================= BILL TO TYPEAHEAD ================= */
+$("billInput").addEventListener("input", async e=>{
+  const q=e.target.value.trim();
+  if(q.length<3) return $("billResults").innerHTML="";
 
-  await login();
+  const token=await auth();
 
-  const res = await fetch(
-    `${FMS_BASE}/fms-platform-order/shipment-orders/search-business-client?Code=${encodeURIComponent(q)}`,
-    {
-      headers:{
-        "Authorization": token,
-        "fms-token": token,
-        "fms-client":"FMS_WEB",
-        "company-id":"SBFH"
-      }
+  const r=await fetch(`${BILL_SEARCH_URL}?Code=${encodeURIComponent(q)}`,{
+    headers:{
+      "Authorization":token,
+      "fms-token":token,
+      "fms-client":FMS_CLIENT,
+      "company-id":COMPANY_ID
     }
-  );
-
-  const json = await res.json();
-  const wrap = document.getElementById("billResults");
-  wrap.innerHTML = "";
-
-  json.data.items.forEach(b=>{
-    const div = document.createElement("div");
-    div.className = "bill-item";
-    div.textContent = `${b.print_name} (${b.code})`;
-    div.onclick = ()=>{
-      selectedBill = b;
-      document.getElementById("billInput").value = b.print_name;
-      wrap.innerHTML = "";
-    };
-    wrap.appendChild(div);
   });
-}
 
-/* =====================
-   ORDER SEARCH
-===================== */
-async function searchOrders(){
-  if(!selectedBill) return alert("Select a Bill To");
+  const j=await r.json();
+  const wrap=$("billResults");
+  wrap.innerHTML="";
 
-  await login();
+  (j?.data?.items||[]).forEach(b=>{
+    const d=document.createElement("div");
+    d.className="bill-item";
+    d.textContent=`${b.print_name} (${b.code})`;
+    d.onclick=()=>{
+      SELECTED_BILL=b;
+      $("billInput").value=b.print_name;
+      wrap.innerHTML="";
+    };
+    wrap.appendChild(d);
+  });
+});
 
-  const payload = {
-    bill_to_accounts:[selectedBill.code],
+/* ================= ORDER SEARCH ================= */
+$("run").addEventListener("click", async ()=>{
+  if(!SELECTED_BILL) return alert("Select a Bill To");
+
+  $("out").textContent="";
+  $("summary").innerHTML="";
+
+  const token=await auth();
+
+  const payload={
+    bill_to_accounts:[SELECTED_BILL.code],
     status:["43","44","50"],
     page_number:1,
     page_size:10000,
     record_status:"0"
   };
 
-  const res = await fetch(
-    `${FMS_BASE}/fms-platform-order/shipment-orders/query`,
-    {
-      method:"POST",
-      headers:{
-        "Authorization": token,
-        "fms-token": token,
-        "Content-Type":"application/json",
-        "fms-client":"FMS_WEB",
-        "company-id":"SBFH"
-      },
-      body:JSON.stringify(payload)
-    }
-  );
+  const r=await fetch(ORDER_QUERY_URL,{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "Authorization":token,
+      "fms-token":token,
+      "fms-client":FMS_CLIENT,
+      "company-id":COMPANY_ID
+    },
+    body:JSON.stringify(payload)
+  });
 
-  const json = await res.json();
-  const pros = [...new Set(json.data.items.map(o=>o.tracking_no).filter(Boolean))];
+  const j=await r.json();
+  const items=j?.data?.items||[];
+  const pros=[...new Set(items.map(i=>i.tracking_no).filter(Boolean))];
 
-  document.getElementById("summary").innerHTML = `
-    <span class="badge">${selectedBill.print_name}</span>
+  $("summary").innerHTML=`
+    <span class="badge">${SELECTED_BILL.print_name}</span>
     <span class="badge">Delivered Orders: ${pros.length}</span>
   `;
 
-  document.getElementById("output").textContent =
-    pros.map(p=>`PRO ${p} — Delivered`).join("\n");
-}
+  $("out").textContent=pros.map(p=>`PRO ${p} — Delivered`).join("\n");
+});
+
+})();
 </script>
 </body>
 </html>
