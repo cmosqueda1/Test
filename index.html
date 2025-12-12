@@ -85,7 +85,7 @@ button{
 <body>
 <div class="wrap">
   <h1>FMS Delivered Orders Audit</h1>
-  <div class="muted">Delivered orders by Bill-To (card view)</div>
+  <div class="muted">Delivered orders by Bill-To (missing BOL only)</div>
 
   <!-- BILL TO SEARCH -->
   <div class="card">
@@ -100,7 +100,7 @@ button{
   <div class="card" id="summaryCard" style="display:none">
     <div class="header">
       <strong id="summaryTitle"></strong>
-      <div>Total Delivered: <span id="totalCount">0</span></div>
+      <div>Total Missing BOL: <span id="totalCount">0</span></div>
     </div>
   </div>
 
@@ -115,6 +115,7 @@ const BASE="https://fms.item.com";
 const LOGIN_URL=`${BASE}/fms-platform-user/Auth/Login`;
 const BILLTO_URL=`${BASE}/fms-platform-order/shipment-orders/search-business-client`;
 const QUERY_URL=`${BASE}/fms-platform-order/shipment-orders/query`;
+const FILES_URL=`${BASE}/fms-platform-order/files`;
 
 const USER="cmosqueda";
 const PASS="cam2121";
@@ -158,6 +159,25 @@ async function billToSearch(q){
   return r.json();
 }
 
+/* ---------- BOL CHECK ---------- */
+async function hasBOL(orderNo){
+  try{
+    const r=await fetch(`${FILES_URL}/${orderNo}`,{
+      headers:{
+        "fms-client":FMS_CLIENT,
+        "fms-token":FMS_TOKEN,
+        "authorization":AUTH_TOKEN,
+        "company-id":COMPANY_ID
+      }
+    });
+    const j=await r.json();
+    return (j?.data||[]).some(f=>f.file_type==="BOL");
+  }catch(e){
+    console.warn("BOL check failed:",orderNo,e);
+    return false;
+  }
+}
+
 /* ---------- DELIVERED QUERY ---------- */
 async function runSearch(){
   if(!selectedBillTo) return;
@@ -188,11 +208,14 @@ async function runSearch(){
   const j=await r.json();
   const items=j?.data?.items||[];
 
-  $("summaryTitle").textContent=`Bill To: ${selectedBillTo.name} (${selectedBillTo.code})`;
-  $("totalCount").textContent=items.length;
-  $("summaryCard").style.display="block";
+  let missingBolCount=0;
 
-  items.forEach(o=>{
+  for(const o of items){
+    const bolExists=await hasBOL(o.order_no);
+    if(bolExists) continue;
+
+    missingBolCount++;
+
     const d=document.createElement("div");
     d.className="order-card";
     d.innerHTML=`
@@ -202,10 +225,15 @@ async function runSearch(){
       <div><strong>PU:</strong> ${o.reference5||"—"}</div>
       <div class="muted">Pickup Complete: ${o.pickup_complete_date||"—"}</div>
       <div class="muted">Delivered Date: ${o.delivery_date||"—"}</div>
-      <div class="muted">BOL Attached: <strong>null</strong></div>
+      <div class="muted">BOL Attached: <strong>NO</strong></div>
     `;
     $("results").appendChild(d);
-  });
+  }
+
+  $("summaryTitle").textContent=
+    `Bill To: ${selectedBillTo.name} (${selectedBillTo.code})`;
+  $("totalCount").textContent=missingBolCount;
+  $("summaryCard").style.display="block";
 }
 
 /* ---------- INPUT HANDLER ---------- */
@@ -234,7 +262,7 @@ $("billToInput").addEventListener("input",e=>{
   },300);
 });
 
-$("searchBtn").addEventListener("click", runSearch);
+$("searchBtn").addEventListener("click",runSearch);
 
 /* ---------- INIT ---------- */
 login();
