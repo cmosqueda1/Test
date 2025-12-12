@@ -84,6 +84,28 @@ button{
   font-size:12px;
   color:var(--muted)
 }
+.progress-wrap{
+  margin-top:10px
+}
+.progress-bar{
+  width:100%;
+  height:10px;
+  background:#0b0f19;
+  border:1px solid var(--border);
+  border-radius:999px;
+  overflow:hidden
+}
+.progress-fill{
+  height:100%;
+  width:0%;
+  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  transition:width .2s ease
+}
+.progress-text{
+  margin-top:4px;
+  font-size:12px;
+  color:var(--muted)
+}
 </style>
 </head>
 
@@ -92,17 +114,23 @@ button{
   <h1>FMS Delivered Orders Audit</h1>
   <div class="muted">Delivered orders by Bill-To (missing BOL only)</div>
 
-  <!-- BILL TO SEARCH -->
   <div class="card">
     <label>Bill To</label>
     <input id="billToInput" placeholder="Type 3+ characters"/>
     <div id="billList" class="list"></div>
     <button id="searchBtn" disabled>Search</button>
     <div id="authStatus" class="muted">Authenticating…</div>
+
     <div id="timer" class="timer" style="display:none">Elapsed Time: 00:00</div>
+
+    <div id="progressWrap" class="progress-wrap" style="display:none">
+      <div class="progress-bar">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
+      <div id="progressText" class="progress-text">Checked 0 / 0</div>
+    </div>
   </div>
 
-  <!-- SUMMARY -->
   <div class="card" id="summaryCard" style="display:none">
     <div class="header">
       <strong id="summaryTitle"></strong>
@@ -110,7 +138,6 @@ button{
     </div>
   </div>
 
-  <!-- RESULTS -->
   <div class="grid" id="results"></div>
 </div>
 
@@ -135,22 +162,21 @@ let selectedBillTo=null;
 let timerInterval=null;
 let startTime=null;
 
+let totalOrders=0;
+let checkedOrders=0;
+
 const $=id=>document.getElementById(id);
 
 /* ---------- AUTH ---------- */
 async function login(){
   const r=await fetch(LOGIN_URL,{
     method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "fms-client":FMS_CLIENT
-    },
+    headers:{ "Content-Type":"application/json","fms-client":FMS_CLIENT },
     body:JSON.stringify({account:USER,password:PASS})
   });
   const j=await r.json();
   FMS_TOKEN=j?.data?.token;
   AUTH_TOKEN=j?.data?.third_party_token;
-  if(!FMS_TOKEN) throw "Login failed";
   $("authStatus").textContent="Authenticated";
 }
 
@@ -185,11 +211,10 @@ async function hasBOL(orderNo){
   }
 }
 
-/* ---------- BATCH PROCESSOR ---------- */
-async function processInBatches(items, batchSize, handler){
+/* ---------- BATCH ---------- */
+async function processInBatches(items,batchSize,handler){
   for(let i=0;i<items.length;i+=batchSize){
-    const batch=items.slice(i,i+batchSize);
-    await Promise.all(batch.map(handler));
+    await Promise.all(items.slice(i,i+batchSize).map(handler));
   }
 }
 
@@ -198,15 +223,17 @@ function startTimer(){
   startTime=Date.now();
   $("timer").style.display="block";
   timerInterval=setInterval(()=>{
-    const elapsed=Math.floor((Date.now()-startTime)/1000);
-    const m=String(Math.floor(elapsed/60)).padStart(2,"0");
-    const s=String(elapsed%60).padStart(2,"0");
-    $("timer").textContent=`Elapsed Time: ${m}:${s}`;
+    const e=Math.floor((Date.now()-startTime)/1000);
+    $("timer").textContent=`Elapsed Time: ${String(Math.floor(e/60)).padStart(2,"0")}:${String(e%60).padStart(2,"0")}`;
   },1000);
 }
+function stopTimer(){ clearInterval(timerInterval); }
 
-function stopTimer(){
-  clearInterval(timerInterval);
+/* ---------- PROGRESS ---------- */
+function updateProgress(){
+  const pct = totalOrders ? (checkedOrders/totalOrders)*100 : 0;
+  $("progressFill").style.width = `${pct}%`;
+  $("progressText").textContent = `Checked ${checkedOrders} / ${totalOrders}`;
 }
 
 /* ---------- SEARCH ---------- */
@@ -215,17 +242,11 @@ async function runSearch(){
 
   $("results").innerHTML="";
   $("summaryCard").style.display="none";
-  $("totalCount").textContent="0";
+  $("progressWrap").style.display="block";
 
+  checkedOrders=0;
+  updateProgress();
   startTimer();
-
-  const payload={
-    bill_to_accounts:[selectedBillTo.code],
-    status:["43","44","50"],
-    record_status:"0",
-    page_number:1,
-    page_size:10000
-  };
 
   const r=await fetch(QUERY_URL,{
     method:"POST",
@@ -236,16 +257,27 @@ async function runSearch(){
       "authorization":AUTH_TOKEN,
       "company-id":COMPANY_ID
     },
-    body:JSON.stringify(payload)
+    body:JSON.stringify({
+      bill_to_accounts:[selectedBillTo.code],
+      status:["43","44","50"],
+      record_status:"0",
+      page_number:1,
+      page_size:10000
+    })
   });
 
-  const j=await r.json();
-  const items=j?.data?.items||[];
+  const items=(await r.json())?.data?.items||[];
+  totalOrders=items.length;
+  updateProgress();
 
   let missingBolCount=0;
 
   await processInBatches(items,15,async o=>{
     const bolExists=await hasBOL(o.order_no);
+
+    checkedOrders++;
+    updateProgress();
+
     if(bolExists) return;
 
     missingBolCount++;
@@ -266,8 +298,7 @@ async function runSearch(){
 
   stopTimer();
 
-  $("summaryTitle").textContent=
-    `Bill To: ${selectedBillTo.name} (${selectedBillTo.code})`;
+  $("summaryTitle").textContent=`Bill To: ${selectedBillTo.name} (${selectedBillTo.code})`;
   $("totalCount").textContent=missingBolCount;
   $("summaryCard").style.display="block";
 }
@@ -282,8 +313,7 @@ $("billToInput").addEventListener("input",e=>{
 
   clearTimeout(debounce);
   debounce=setTimeout(async()=>{
-    const j=await billToSearch(q);
-    (j?.data?.items||[]).forEach(i=>{
+    (await billToSearch(q))?.data?.items?.forEach(i=>{
       const d=document.createElement("div");
       d.className="item";
       d.textContent=`${i.print_name} (${i.code})`;
@@ -300,7 +330,6 @@ $("billToInput").addEventListener("input",e=>{
 
 $("searchBtn").addEventListener("click",runSearch);
 
-/* ---------- INIT ---------- */
 login();
 
 })();
