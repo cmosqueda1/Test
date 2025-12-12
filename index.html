@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>FMS Delivered Orders Audit</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<style>
+:root{
+  --bg:#05070b;
+  --card:#0f1420;
+  --card-soft:#111827;
+  --text:#e6edf6;
+  --muted:#93a4b7;
+  --accent:#7c3aed;
+  --border:#1f2933;
+  --ok:#10b981;
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;
+}
+
+.wrap{
+  max-width:1100px;
+  margin:40px auto;
+  padding:20px;
+}
+
+h1{
+  margin:0 0 10px 0;
+  font-size:26px;
+}
+
+.card{
+  background:linear-gradient(180deg,#111827 0%, #0b1220 100%);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:18px;
+  margin-bottom:16px;
+}
+
+label{
+  display:block;
+  font-size:13px;
+  color:var(--muted);
+  margin-bottom:6px;
+}
+
+input, select, button{
+  width:100%;
+  padding:12px;
+  border-radius:10px;
+  border:1px solid var(--border);
+  background:#020617;
+  color:var(--text);
+  font-size:14px;
+}
+
+button{
+  background:linear-gradient(135deg,var(--accent),#4c1d95);
+  border:none;
+  cursor:pointer;
+  margin-top:10px;
+}
+
+button:disabled{
+  opacity:.6;
+  cursor:not-allowed;
+}
+
+.row{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+
+.results{
+  font-family:ui-monospace,Consolas,monospace;
+  font-size:13px;
+  line-height:1.6;
+  white-space:pre-wrap;
+}
+
+.badge{
+  display:inline-block;
+  padding:4px 10px;
+  border-radius:999px;
+  background:#020617;
+  border:1px solid var(--border);
+  margin-right:6px;
+  font-size:12px;
+}
+
+.ok{ color:var(--ok); }
+</style>
+</head>
+
+<body>
+<div class="wrap">
+  <h1>FMS Delivered Orders Audit</h1>
+
+  <div class="card">
+    <label>Bill To Search</label>
+    <input id="billSearch" placeholder="e.g. Cola" />
+    <button onclick="searchBillTo()">Search Bill To</button>
+  </div>
+
+  <div class="card">
+    <label>Select Bill To</label>
+    <select id="billSelect"></select>
+    <button onclick="runOrderSearch()">Search Delivered Orders</button>
+  </div>
+
+  <div class="card">
+    <div id="summary"></div>
+  </div>
+
+  <div class="card">
+    <div class="results" id="output"></div>
+  </div>
+</div>
+
+<script>
+const FMS_BASE = "https://fms.item.com";
+let token = null;
+
+/* ============================
+   AUTH
+============================ */
+async function login(){
+  if(token) return token;
+
+  const res = await fetch(`${FMS_BASE}/fms-platform-user/Auth/Login`,{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "fms-client":"FMS_WEB",
+      "company-id":"SBFH"
+    },
+    body:JSON.stringify({
+      account:"cmosqueda",
+      password:"cam2121"
+    })
+  });
+
+  const json = await res.json();
+  token = json.data.token;
+  return token;
+}
+
+/* ============================
+   BILL TO SEARCH
+============================ */
+async function searchBillTo(){
+  const term = document.getElementById("billSearch").value.trim();
+  if(!term) return alert("Enter Bill To search text");
+
+  await login();
+
+  const res = await fetch(
+    `${FMS_BASE}/fms-platform-order/shipment-orders/search-business-client?Code=${encodeURIComponent(term)}`,
+    {
+      headers:{
+        "Authorization":token,
+        "fms-client":"FMS_WEB",
+        "company-id":"SBFH"
+      }
+    }
+  );
+
+  const json = await res.json();
+  const sel = document.getElementById("billSelect");
+  sel.innerHTML = "";
+
+  json.data.items.forEach(b=>{
+    const opt = document.createElement("option");
+    opt.value = b.code;
+    opt.textContent = `${b.print_name} (${b.code})`;
+    sel.appendChild(opt);
+  });
+}
+
+/* ============================
+   ORDER SEARCH
+============================ */
+async function runOrderSearch(){
+  const billCode = document.getElementById("billSelect").value;
+  if(!billCode) return alert("Select a Bill To");
+
+  await login();
+
+  const payload = {
+    bill_to_accounts:[billCode],
+    status:["43","44","50"],
+    page_number:1,
+    page_size:10000,
+    record_status:"0",
+    exception:false,
+    delayed:false,
+    hold:false
+  };
+
+  const res = await fetch(
+    `${FMS_BASE}/fms-platform-order/shipment-orders/query`,
+    {
+      method:"POST",
+      headers:{
+        "Authorization":token,
+        "Content-Type":"application/json",
+        "fms-client":"FMS_WEB",
+        "company-id":"SBFH"
+      },
+      body:JSON.stringify(payload)
+    }
+  );
+
+  const json = await res.json();
+  const items = json.data.items || [];
+
+  const pros = [...new Set(items.map(o=>o.tracking_no).filter(Boolean))];
+
+  document.getElementById("summary").innerHTML = `
+    <span class="badge">Bill To: ${billCode}</span>
+    <span class="badge ok">Delivered Orders: ${pros.length}</span>
+  `;
+
+  document.getElementById("output").textContent =
+    pros.map(p=>`PRO ${p} — Delivered`).join("\n");
+}
+</script>
+</body>
+</html>
