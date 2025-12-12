@@ -9,8 +9,7 @@
 :root{
   --bg:#0a0c10;--card:#0f1420;--text:#e6edf6;--muted:#93a4b7;
   --accent:#7c3aed;--accent2:#22d3ee;--border:#1f2a3a;
-  --ok:#10b981;
-  --warn:#facc15;
+  --ok:#10b981;--warn:#facc15
 }
 *{box-sizing:border-box}
 body{
@@ -44,6 +43,10 @@ button{
   font-weight:700;
   cursor:pointer
 }
+button.secondary{
+  background:#0b0f19;
+  color:var(--text)
+}
 .list{margin-top:10px}
 .item{
   padding:10px;
@@ -57,7 +60,7 @@ button{
 .grid{
   display:grid;
   grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
-  gap:12px;
+  gap:12px
 }
 .order-card{
   background:#0b0f19;
@@ -65,32 +68,12 @@ button{
   border-radius:14px;
   padding:12px
 }
-.badges{
-  display:flex;
-  gap:6px;
-  margin-bottom:6px
-}
-.badge{
-  display:inline-block;
-  padding:4px 10px;
-  border-radius:999px;
-  font-size:11px;
-  font-weight:600;
-}
-.badge.delivered{
-  background:rgba(16,185,129,.15);
-  color:var(--ok)
-}
-.badge.warn{
-  background:rgba(250,204,21,.18);
-  color:var(--warn)
-}
+.badges{display:flex;gap:6px;margin-bottom:6px}
+.badge{padding:4px 10px;border-radius:999px;font-size:11px;font-weight:600}
+.badge.delivered{background:rgba(16,185,129,.15);color:var(--ok)}
+.badge.warn{background:rgba(250,204,21,.18);color:var(--warn)}
 .muted{color:var(--muted);font-size:12px}
-.header{
-  display:flex;
-  justify-content:space-between;
-  align-items:center
-}
+.header{display:flex;justify-content:space-between;align-items:center}
 .timer{margin-top:8px;font-size:12px;color:var(--muted)}
 .progress-wrap{margin-top:10px}
 .progress-bar{
@@ -116,14 +99,13 @@ button{
     <input id="billToInput" placeholder="Type 3+ characters"/>
     <div id="billList" class="list"></div>
     <button id="searchBtn" disabled>Search</button>
-    <div id="authStatus" class="muted">Authenticating…</div>
+    <button id="exportBtn" class="secondary" style="display:none">Export CSV</button>
 
+    <div id="authStatus" class="muted">Authenticating…</div>
     <div id="timer" class="timer" style="display:none">Elapsed Time: 00:00</div>
 
     <div id="progressWrap" class="progress-wrap" style="display:none">
-      <div class="progress-bar">
-        <div id="progressFill" class="progress-fill"></div>
-      </div>
+      <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
       <div id="progressText" class="progress-text">Checked 0 / 0</div>
     </div>
   </div>
@@ -152,22 +134,20 @@ const PASS="cam2121";
 const FMS_CLIENT="FMS_WEB";
 const COMPANY_ID="SBFH";
 
-let FMS_TOKEN=null, AUTH_TOKEN=null, debounce=null, selectedBillTo=null;
+let FMS_TOKEN=null, AUTH_TOKEN=null;
+let selectedBillTo=null, debounce=null;
 let timerInterval=null, startTime=null;
 let totalOrders=0, checkedOrders=0;
+
+const missingBolRows=[]; // ← used for CSV export
 
 const $=id=>document.getElementById(id);
 
 /* ---------- UTIL ---------- */
 function fmtDate(v){
-  if(!v) return "—";
+  if(!v) return "";
   const d=new Date(v);
-  const mm=String(d.getMonth()+1).padStart(2,"0");
-  const dd=String(d.getDate()).padStart(2,"0");
-  const yy=d.getFullYear();
-  const hh=String(d.getHours()).padStart(2,"0");
-  const mi=String(d.getMinutes()).padStart(2,"0");
-  return `${mm}/${dd}/${yy} - ${hh}:${mi}`;
+  return `${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}/${d.getFullYear()} - ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
 }
 
 /* ---------- AUTH ---------- */
@@ -224,29 +204,45 @@ function startTimer(){
   $("timer").style.display="block";
   timerInterval=setInterval(()=>{
     const e=Math.floor((Date.now()-startTime)/1000);
-    $("timer").textContent=
-      `Elapsed Time: ${String(Math.floor(e/60)).padStart(2,"0")}:${String(e%60).padStart(2,"0")}`;
+    $("timer").textContent=`Elapsed Time: ${String(Math.floor(e/60)).padStart(2,"0")}:${String(e%60).padStart(2,"0")}`;
   },1000);
 }
 function stopTimer(){clearInterval(timerInterval)}
 
 /* ---------- PROGRESS ---------- */
 function updateProgress(){
-  const pct=totalOrders?(checkedOrders/totalOrders)*100:0;
-  $("progressFill").style.width=`${pct}%`;
+  $("progressFill").style.width=`${totalOrders?(checkedOrders/totalOrders)*100:0}%`;
   $("progressText").textContent=`Checked ${checkedOrders} / ${totalOrders}`;
+}
+
+/* ---------- CSV EXPORT ---------- */
+function exportCSV(){
+  const rows=[
+    ["PRO","DO","PU","Status","Pickup Date","Delivery Date","BOL Attached"]
+  ];
+
+  missingBolRows
+    .sort((a,b)=>new Date(a.deliveryRaw)-new Date(b.deliveryRaw))
+    .forEach(r=>{
+      rows.push([
+        r.pro,r.do,r.pu,"Delivered",r.pickup,r.delivery,"N"
+      ]);
+    });
+
+  const csv=rows.map(r=>r.map(v=>`"${v||""}"`).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="missing_bol_orders.csv";
+  a.click();
 }
 
 /* ---------- SEARCH ---------- */
 async function runSearch(){
-  if(!selectedBillTo) return;
-
   $("results").innerHTML="";
-  $("summaryCard").style.display="none";
-  $("progressWrap").style.display="block";
+  $("exportBtn").style.display="none";
+  missingBolRows.length=0;
 
-  checkedOrders=0;
-  updateProgress();
   startTimer();
 
   const r=await fetch(QUERY_URL,{
@@ -269,17 +265,22 @@ async function runSearch(){
 
   const items=(await r.json())?.data?.items||[];
   totalOrders=items.length;
+  checkedOrders=0;
   updateProgress();
-
-  let missingBolCount=0;
 
   await processInBatches(items,15,async o=>{
     const bolExists=await hasBOL(o.order_no);
-    checkedOrders++;
-    updateProgress();
+    checkedOrders++; updateProgress();
     if(bolExists) return;
 
-    missingBolCount++;
+    missingBolRows.push({
+      pro:o.tracking_no,
+      do:o.order_no,
+      pu:o.reference5||"",
+      pickup:fmtDate(o.pickup_complete_date),
+      delivery:fmtDate(o.delivery_date),
+      deliveryRaw:o.delivery_date
+    });
 
     const d=document.createElement("div");
     d.className="order-card";
@@ -298,9 +299,7 @@ async function runSearch(){
   });
 
   stopTimer();
-  $("summaryTitle").textContent=`Bill To: ${selectedBillTo.name} (${selectedBillTo.code})`;
-  $("totalCount").textContent=missingBolCount;
-  $("summaryCard").style.display="block";
+  $("exportBtn").style.display="inline-block";
 }
 
 /* ---------- INPUT ---------- */
@@ -328,6 +327,8 @@ $("billToInput").addEventListener("input",e=>{
 });
 
 $("searchBtn").addEventListener("click",runSearch);
+$("exportBtn").addEventListener("click",exportCSV);
+
 login();
 
 })();
