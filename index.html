@@ -33,15 +33,6 @@ input{
   border:1px solid var(--border);
   color:var(--text)
 }
-.btn{
-  margin-top:10px;
-  padding:10px 16px;
-  border-radius:14px;
-  border:1px solid var(--border);
-  background:linear-gradient(90deg,var(--accent),var(--accent2));
-  font-weight:700;
-  cursor:pointer
-}
 .list{margin-top:10px}
 .item{
   padding:10px;
@@ -65,7 +56,7 @@ pre{
 <body>
 <div class="wrap">
   <h1>FMS Delivered Orders Audit</h1>
-  <div class="muted">Search delivered orders by Bill To</div>
+  <div class="muted">Token-based Bill To search (pure HTML)</div>
 
   <div class="card">
     <label>Bill To</label>
@@ -84,25 +75,24 @@ pre{
 
 const BASE = "https://fms.item.com";
 const LOGIN_URL = `${BASE}/fms-platform-user/Auth/Login`;
-const BILLTO_URL = `${BASE}/fms-platform-order/shipment-orders/search-business-client`;
+const QUERY_URL = `${BASE}/fms-platform-order/shipment-orders/query`;
 
 const USER = "PeniTaufalele";
 const PASS = "FMSoffload1!";
 const FMS_CLIENT = "FMS_WEB";
 const COMPANY_ID = "SBFH";
 
-let loggedIn = false;
+let TOKEN = null;
 let debounce = null;
 
 const $ = id => document.getElementById(id);
 const out = $("output");
 
-async function login(){
-  if (loggedIn) return;
+async function auth(){
+  if (TOKEN) return TOKEN;
 
   const r = await fetch(LOGIN_URL,{
     method:"POST",
-    credentials:"include",
     headers:{
       "Content-Type":"application/json",
       "fms-client":FMS_CLIENT
@@ -113,55 +103,78 @@ async function login(){
     })
   });
 
-  if (!r.ok) throw "Login failed";
-  loggedIn = true;
+  const j = await r.json();
+  TOKEN = j.token || j?.data?.token;
+  if (!TOKEN) throw new Error("Login failed");
+  return TOKEN;
 }
 
 async function billToSearch(q){
-  await login();
+  const token = await auth();
 
-  const r = await fetch(BILLTO_URL,{
+  const r = await fetch(QUERY_URL,{
     method:"POST",
-    credentials:"include",
     headers:{
       "Content-Type":"application/json",
-      "company-id":COMPANY_ID,
-      "fms-client":FMS_CLIENT
+      "fms-client":FMS_CLIENT,
+      "fms-token":token,
+      "Company-Id":COMPANY_ID
     },
     body:JSON.stringify({
-      code:q,
-      printName:"",
-      pageNum:1,
-      pageSize:20
+      page_number:1,
+      page_size:100,
+      record_status:"0"
     })
   });
 
-  return r.json();
+  const j = await r.json();
+  const items = j?.data?.items || [];
+
+  // Extract + filter Bill-To
+  const map = {};
+  items.forEach(i=>{
+    const code = i.bill_to_code;
+    const name = i.bill_to_name;
+    if (!code || !name) return;
+
+    if (
+      code.toLowerCase().includes(q.toLowerCase()) ||
+      name.toLowerCase().includes(q.toLowerCase())
+    ) {
+      map[code] = name;
+    }
+  });
+
+  return Object.entries(map).map(([code,name])=>({code,name}));
 }
 
 $("billToInput").addEventListener("input",e=>{
-  const q=e.target.value.trim();
+  const q = e.target.value.trim();
   $("billList").innerHTML="";
   out.textContent="";
-  if(q.length<3) return;
+  if(q.length < 3) return;
 
   clearTimeout(debounce);
-  debounce=setTimeout(async()=>{
+  debounce = setTimeout(async()=>{
     try{
-      const j=await billToSearch(q);
-      (j?.data?.items||[]).forEach(i=>{
-        const d=document.createElement("div");
+      const results = await billToSearch(q);
+      results.forEach(i=>{
+        const d = document.createElement("div");
         d.className="item";
-        d.textContent=`${i.print_name} (${i.code})`;
-        d.onclick=()=>{
-          $("billToInput").value=i.code;
+        d.textContent = `${i.name} (${i.code})`;
+        d.onclick = ()=>{
+          $("billToInput").value = i.code;
           $("billList").innerHTML="";
           out.textContent = JSON.stringify(i,null,2);
         };
         $("billList").appendChild(d);
       });
+
+      if(!results.length){
+        out.textContent = "No Bill To matches found in recent orders.";
+      }
     }catch(err){
-      out.textContent="Bill To search failed";
+      out.textContent = "Bill To search failed";
     }
   },300);
 });
