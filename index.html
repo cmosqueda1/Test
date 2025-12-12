@@ -98,14 +98,18 @@ button.secondary{
     <label>Bill To</label>
     <input id="billToInput" placeholder="Type 3+ characters"/>
     <div id="billList" class="list"></div>
+
     <button id="searchBtn" disabled>Search</button>
     <button id="exportBtn" class="secondary" style="display:none">Export CSV</button>
 
     <div id="authStatus" class="muted">Authenticating…</div>
     <div id="timer" class="timer" style="display:none">Elapsed Time: 00:00</div>
 
+    <!-- PROGRESS BAR (RESTORED) -->
     <div id="progressWrap" class="progress-wrap" style="display:none">
-      <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+      <div class="progress-bar">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
       <div id="progressText" class="progress-text">Checked 0 / 0</div>
     </div>
   </div>
@@ -139,7 +143,7 @@ let selectedBillTo=null, debounce=null;
 let timerInterval=null, startTime=null;
 let totalOrders=0, checkedOrders=0;
 
-const missingBolRows=[]; // ← used for CSV export
+const missingBolRows=[]; // for CSV export
 
 const $=id=>document.getElementById(id);
 
@@ -147,7 +151,12 @@ const $=id=>document.getElementById(id);
 function fmtDate(v){
   if(!v) return "";
   const d=new Date(v);
-  return `${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}/${d.getFullYear()} - ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  const mm=String(d.getMonth()+1).padStart(2,"0");
+  const dd=String(d.getDate()).padStart(2,"0");
+  const yy=d.getFullYear();
+  const hh=String(d.getHours()).padStart(2,"0");
+  const mi=String(d.getMinutes()).padStart(2,"0");
+  return `${mm}/${dd}/${yy} - ${hh}:${mi}`;
 }
 
 /* ---------- AUTH ---------- */
@@ -187,8 +196,11 @@ async function hasBOL(orderNo){
         "company-id":COMPANY_ID
       }
     });
-    return (await r.json())?.data?.some(f=>f.file_type==="BOL");
-  }catch{return false}
+    const j=await r.json();
+    return (j?.data||[]).some(f=>f.file_type==="BOL");
+  }catch{
+    return false;
+  }
 }
 
 /* ---------- BATCH ---------- */
@@ -202,46 +214,66 @@ async function processInBatches(items,size,fn){
 function startTimer(){
   startTime=Date.now();
   $("timer").style.display="block";
+  clearInterval(timerInterval);
   timerInterval=setInterval(()=>{
     const e=Math.floor((Date.now()-startTime)/1000);
     $("timer").textContent=`Elapsed Time: ${String(Math.floor(e/60)).padStart(2,"0")}:${String(e%60).padStart(2,"0")}`;
   },1000);
 }
-function stopTimer(){clearInterval(timerInterval)}
+function stopTimer(){ clearInterval(timerInterval); }
 
 /* ---------- PROGRESS ---------- */
+function showProgress(){
+  $("progressWrap").style.display="block";
+  updateProgress();
+}
 function updateProgress(){
-  $("progressFill").style.width=`${totalOrders?(checkedOrders/totalOrders)*100:0}%`;
+  const pct=totalOrders ? (checkedOrders/totalOrders)*100 : 0;
+  $("progressFill").style.width=`${pct}%`;
   $("progressText").textContent=`Checked ${checkedOrders} / ${totalOrders}`;
 }
 
 /* ---------- CSV EXPORT ---------- */
 function exportCSV(){
-  const rows=[
-    ["PRO","DO","PU","Status","Pickup Date","Delivery Date","BOL Attached"]
-  ];
+  // Sort rules:
+  // 1) BOL Attached N first (all rows here are N, but kept for future-proofing)
+  // 2) Oldest delivery date -> newest
+  const sorted=[...missingBolRows].sort((a,b)=>{
+    const bolA=(a.bol||"N"), bolB=(b.bol||"N");
+    if(bolA!==bolB) return bolA==="N" ? -1 : 1;
 
-  missingBolRows
-    .sort((a,b)=>new Date(a.deliveryRaw)-new Date(b.deliveryRaw))
-    .forEach(r=>{
-      rows.push([
-        r.pro,r.do,r.pu,"Delivered",r.pickup,r.delivery,"N"
-      ]);
-    });
+    const da=a.deliveryRaw ? new Date(a.deliveryRaw).getTime() : Number.POSITIVE_INFINITY;
+    const db=b.deliveryRaw ? new Date(b.deliveryRaw).getTime() : Number.POSITIVE_INFINITY;
+    return da - db;
+  });
 
-  const csv=rows.map(r=>r.map(v=>`"${v||""}"`).join(",")).join("\n");
-  const blob=new Blob([csv],{type:"text/csv"});
+  const rows=[["PRO","DO","PU","Status","Pickup Date","Delivery Date","BOL Attached (Y/N)"]];
+  sorted.forEach(r=>{
+    rows.push([r.pro,r.do,r.pu,r.status,r.pickup,r.delivery,r.bol]);
+  });
+
+  const csv=rows.map(r=>r.map(v=>`"${String(v??"").replaceAll('"','""')}"`).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
   const a=document.createElement("a");
   a.href=URL.createObjectURL(blob);
-  a.download="missing_bol_orders.csv";
+  a.download=`missing_bol_orders_${selectedBillTo?.code||"billto"}.csv`;
   a.click();
 }
 
 /* ---------- SEARCH ---------- */
 async function runSearch(){
+  if(!selectedBillTo) return;
+
+  // reset UI/state
   $("results").innerHTML="";
+  $("summaryCard").style.display="none";
   $("exportBtn").style.display="none";
+  $("progressWrap").style.display="none";
   missingBolRows.length=0;
+
+  totalOrders=0;
+  checkedOrders=0;
+  updateProgress();
 
   startTimer();
 
@@ -266,22 +298,38 @@ async function runSearch(){
   const items=(await r.json())?.data?.items||[];
   totalOrders=items.length;
   checkedOrders=0;
-  updateProgress();
+
+  showProgress();
+
+  let missingBolCount=0;
 
   await processInBatches(items,15,async o=>{
     const bolExists=await hasBOL(o.order_no);
-    checkedOrders++; updateProgress();
+
+    // count completion of this order's file check
+    checkedOrders++;
+    updateProgress();
+
     if(bolExists) return;
 
+    missingBolCount++;
+
+    const pickupFmt=fmtDate(o.pickup_complete_date);
+    const deliveryFmt=fmtDate(o.delivery_date);
+
+    // store for CSV
     missingBolRows.push({
-      pro:o.tracking_no,
-      do:o.order_no,
+      pro:o.tracking_no||"",
+      do:o.order_no||"",
       pu:o.reference5||"",
-      pickup:fmtDate(o.pickup_complete_date),
-      delivery:fmtDate(o.delivery_date),
-      deliveryRaw:o.delivery_date
+      status:"Delivered",
+      pickup:pickupFmt,
+      delivery:deliveryFmt,
+      deliveryRaw:o.delivery_date||"",
+      bol:"N"
     });
 
+    // render card
     const d=document.createElement("div");
     d.className="order-card";
     d.innerHTML=`
@@ -292,14 +340,22 @@ async function runSearch(){
       <div><strong>PRO:</strong> ${o.tracking_no}</div>
       <div><strong>DO:</strong> ${o.order_no}</div>
       <div><strong>PU:</strong> ${o.reference5||"—"}</div>
-      <div class="muted">Pickup Complete: ${fmtDate(o.pickup_complete_date)}</div>
-      <div class="muted">Delivered Date: ${fmtDate(o.delivery_date)}</div>
+      <div class="muted">Pickup Complete: ${pickupFmt || "—"}</div>
+      <div class="muted">Delivered Date: ${deliveryFmt || "—"}</div>
     `;
     $("results").appendChild(d);
   });
 
   stopTimer();
-  $("exportBtn").style.display="inline-block";
+
+  $("summaryTitle").textContent=`Bill To: ${selectedBillTo.name} (${selectedBillTo.code})`;
+  $("totalCount").textContent=missingBolCount;
+  $("summaryCard").style.display="block";
+
+  // show export only after full completion
+  if(checkedOrders===totalOrders){
+    $("exportBtn").style.display="inline-block";
+  }
 }
 
 /* ---------- INPUT ---------- */
@@ -309,9 +365,11 @@ $("billToInput").addEventListener("input",e=>{
   $("searchBtn").disabled=true;
   selectedBillTo=null;
   if(q.length<3) return;
+
   clearTimeout(debounce);
   debounce=setTimeout(async()=>{
-    (await billToSearch(q))?.data?.items?.forEach(i=>{
+    const j=await billToSearch(q);
+    (j?.data?.items||[]).forEach(i=>{
       const d=document.createElement("div");
       d.className="item";
       d.textContent=`${i.print_name} (${i.code})`;
