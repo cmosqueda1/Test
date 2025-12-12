@@ -9,7 +9,8 @@
 :root{
   --bg:#0a0c10;--card:#0f1420;--text:#e6edf6;--muted:#93a4b7;
   --accent:#7c3aed;--accent2:#22d3ee;--border:#1f2a3a;
-  --ok:#10b981
+  --ok:#10b981;
+  --warn:#facc15;
 }
 *{box-sizing:border-box}
 body{
@@ -64,14 +65,25 @@ button{
   border-radius:14px;
   padding:12px
 }
+.badges{
+  display:flex;
+  gap:6px;
+  margin-bottom:6px
+}
 .badge{
   display:inline-block;
-  padding:4px 8px;
+  padding:4px 10px;
   border-radius:999px;
   font-size:11px;
+  font-weight:600;
+}
+.badge.delivered{
   background:rgba(16,185,129,.15);
-  color:var(--ok);
-  margin-bottom:6px
+  color:var(--ok)
+}
+.badge.warn{
+  background:rgba(250,204,21,.18);
+  color:var(--warn)
 }
 .muted{color:var(--muted);font-size:12px}
 .header{
@@ -79,33 +91,18 @@ button{
   justify-content:space-between;
   align-items:center
 }
-.timer{
-  margin-top:8px;
-  font-size:12px;
-  color:var(--muted)
-}
-.progress-wrap{
-  margin-top:10px
-}
+.timer{margin-top:8px;font-size:12px;color:var(--muted)}
+.progress-wrap{margin-top:10px}
 .progress-bar{
-  width:100%;
-  height:10px;
-  background:#0b0f19;
-  border:1px solid var(--border);
-  border-radius:999px;
-  overflow:hidden
+  width:100%;height:10px;background:#0b0f19;
+  border:1px solid var(--border);border-radius:999px;overflow:hidden
 }
 .progress-fill{
-  height:100%;
-  width:0%;
+  height:100%;width:0%;
   background:linear-gradient(90deg,var(--accent),var(--accent2));
   transition:width .2s ease
 }
-.progress-text{
-  margin-top:4px;
-  font-size:12px;
-  color:var(--muted)
-}
+.progress-text{margin-top:4px;font-size:12px;color:var(--muted)}
 </style>
 </head>
 
@@ -155,17 +152,23 @@ const PASS="cam2121";
 const FMS_CLIENT="FMS_WEB";
 const COMPANY_ID="SBFH";
 
-let FMS_TOKEN=null;
-let AUTH_TOKEN=null;
-let debounce=null;
-let selectedBillTo=null;
-let timerInterval=null;
-let startTime=null;
-
-let totalOrders=0;
-let checkedOrders=0;
+let FMS_TOKEN=null, AUTH_TOKEN=null, debounce=null, selectedBillTo=null;
+let timerInterval=null, startTime=null;
+let totalOrders=0, checkedOrders=0;
 
 const $=id=>document.getElementById(id);
+
+/* ---------- UTIL ---------- */
+function fmtDate(v){
+  if(!v) return "—";
+  const d=new Date(v);
+  const mm=String(d.getMonth()+1).padStart(2,"0");
+  const dd=String(d.getDate()).padStart(2,"0");
+  const yy=d.getFullYear();
+  const hh=String(d.getHours()).padStart(2,"0");
+  const mi=String(d.getMinutes()).padStart(2,"0");
+  return `${mm}/${dd}/${yy} - ${hh}:${mi}`;
+}
 
 /* ---------- AUTH ---------- */
 async function login(){
@@ -180,7 +183,7 @@ async function login(){
   $("authStatus").textContent="Authenticated";
 }
 
-/* ---------- BILL TO SEARCH ---------- */
+/* ---------- BILL TO ---------- */
 async function billToSearch(q){
   const r=await fetch(`${BILLTO_URL}?Code=${encodeURIComponent(q)}`,{
     headers:{
@@ -193,7 +196,7 @@ async function billToSearch(q){
   return r.json();
 }
 
-/* ---------- BOL CHECK ---------- */
+/* ---------- BOL ---------- */
 async function hasBOL(orderNo){
   try{
     const r=await fetch(`${FILES_URL}/${orderNo}`,{
@@ -204,17 +207,14 @@ async function hasBOL(orderNo){
         "company-id":COMPANY_ID
       }
     });
-    const j=await r.json();
-    return (j?.data||[]).some(f=>f.file_type==="BOL");
-  }catch{
-    return false;
-  }
+    return (await r.json())?.data?.some(f=>f.file_type==="BOL");
+  }catch{return false}
 }
 
 /* ---------- BATCH ---------- */
-async function processInBatches(items,batchSize,handler){
-  for(let i=0;i<items.length;i+=batchSize){
-    await Promise.all(items.slice(i,i+batchSize).map(handler));
+async function processInBatches(items,size,fn){
+  for(let i=0;i<items.length;i+=size){
+    await Promise.all(items.slice(i,i+size).map(fn));
   }
 }
 
@@ -224,16 +224,17 @@ function startTimer(){
   $("timer").style.display="block";
   timerInterval=setInterval(()=>{
     const e=Math.floor((Date.now()-startTime)/1000);
-    $("timer").textContent=`Elapsed Time: ${String(Math.floor(e/60)).padStart(2,"0")}:${String(e%60).padStart(2,"0")}`;
+    $("timer").textContent=
+      `Elapsed Time: ${String(Math.floor(e/60)).padStart(2,"0")}:${String(e%60).padStart(2,"0")}`;
   },1000);
 }
-function stopTimer(){ clearInterval(timerInterval); }
+function stopTimer(){clearInterval(timerInterval)}
 
 /* ---------- PROGRESS ---------- */
 function updateProgress(){
-  const pct = totalOrders ? (checkedOrders/totalOrders)*100 : 0;
-  $("progressFill").style.width = `${pct}%`;
-  $("progressText").textContent = `Checked ${checkedOrders} / ${totalOrders}`;
+  const pct=totalOrders?(checkedOrders/totalOrders)*100:0;
+  $("progressFill").style.width=`${pct}%`;
+  $("progressText").textContent=`Checked ${checkedOrders} / ${totalOrders}`;
 }
 
 /* ---------- SEARCH ---------- */
@@ -274,10 +275,8 @@ async function runSearch(){
 
   await processInBatches(items,15,async o=>{
     const bolExists=await hasBOL(o.order_no);
-
     checkedOrders++;
     updateProgress();
-
     if(bolExists) return;
 
     missingBolCount++;
@@ -285,19 +284,20 @@ async function runSearch(){
     const d=document.createElement("div");
     d.className="order-card";
     d.innerHTML=`
-      <div class="badge">Delivered</div>
+      <div class="badges">
+        <span class="badge delivered">Delivered</span>
+        <span class="badge warn">BOL Missing</span>
+      </div>
       <div><strong>PRO:</strong> ${o.tracking_no}</div>
       <div><strong>DO:</strong> ${o.order_no}</div>
       <div><strong>PU:</strong> ${o.reference5||"—"}</div>
-      <div class="muted">Pickup Complete: ${o.pickup_complete_date||"—"}</div>
-      <div class="muted">Delivered Date: ${o.delivery_date||"—"}</div>
-      <div class="muted">BOL Attached: <strong>NO</strong></div>
+      <div class="muted">Pickup Complete: ${fmtDate(o.pickup_complete_date)}</div>
+      <div class="muted">Delivered Date: ${fmtDate(o.delivery_date)}</div>
     `;
     $("results").appendChild(d);
   });
 
   stopTimer();
-
   $("summaryTitle").textContent=`Bill To: ${selectedBillTo.name} (${selectedBillTo.code})`;
   $("totalCount").textContent=missingBolCount;
   $("summaryCard").style.display="block";
@@ -310,7 +310,6 @@ $("billToInput").addEventListener("input",e=>{
   $("searchBtn").disabled=true;
   selectedBillTo=null;
   if(q.length<3) return;
-
   clearTimeout(debounce);
   debounce=setTimeout(async()=>{
     (await billToSearch(q))?.data?.items?.forEach(i=>{
@@ -329,7 +328,6 @@ $("billToInput").addEventListener("input",e=>{
 });
 
 $("searchBtn").addEventListener("click",runSearch);
-
 login();
 
 })();
